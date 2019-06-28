@@ -1,3 +1,5 @@
+
+
 /**TO-DO:
    Better RPM Measurement during shift RPM change verification (minimum time period required to get within RPMTOLERANCE)
    Implement datalogging
@@ -14,6 +16,7 @@
 //This is a slight modification of Arduino's built-in servo library
 #include <PulseServo.h>
 #include <CmdMessenger.h>
+#include <FreqMeasureMulti.h>
 
 #define DPIN_RX             0
 #define DPIN_TX             1
@@ -30,7 +33,8 @@
 #define DPIN_ENCODER_2APASS 8
 #define DPIN_ENCODER_2B     32//wire to pin 17 (A3)
 #define DPIN_ENCODER_2BPASS 17
-
+#define DPIN_MOTOR_1        22
+#define DPIN_MOTOR_2        23
 
 //analog
 #define APIN_THROTTLE       A1//15
@@ -268,6 +272,7 @@ long lastspeedloopmillis = 0;
 float axlerpms = 0;
 float expectedmotorrpms = 0;
 boolean coasting = false;
+unsigned long lastrpmreading = 0;
 
 #define LOWRPMTHRESHOLD  550
 #define LOWRPMTHROTTLE   0.22f
@@ -280,6 +285,7 @@ boolean coasting = false;
 #define COUNTSPERFOOT 750.8f      //assumes that dynapar is reduced 53.9/25.9 from axle, 4096 counts/dynapar rev, 10" tires with 
 #define FEETPERMILE 5280
 #define SPEEDRPMFACTOR 33.61f
+#define FREQTORPM 2.85714f//1.4286f   //returning 1Hz results in ~1.4RPM, with 42 increments per rotation it takes 42 seconds to make one rotation at 1Hz between commutations
 #define MOTORKV 130
 #define GEAR0RATIO  8.348f   //defined this way (95% of third) so we can jump to *any* gear from neutral and the motor will always be spinning slow enough
 #define GEAR1RATIO  15.623f
@@ -312,8 +318,11 @@ float thrdivisor = (SERVOMAX - SERVOZERO) / THROTTLERANGE;
 //INSTANTIATIONS
 PulseServo myservo;          //the output is basically just a servo output, specially-controlled
 //Servo myservo;
-QuadDecode<1> motorPosn;  // Template using FTM1
-QuadDecode<2> axlePosn;  // Template using FTM2
+
+FreqMeasureMulti Lmotor;
+QuadDecode<2> LaxlePosn;  // Template using FTM2
+FreqMeasureMulti Rmotor;
+QuadDecode<1> RaxlePosn;  // Template using FTM1
 
 //------------------------ANALOG SAMPLING-------------------------------------
 //
@@ -333,8 +342,8 @@ void sample()
   thistime = micros();
   times[thisindex] = thistime;
   //get our encoder positions.  at 100RPM in low gear, axle encoder is ~200pulses/sec and motor encoder is ~70pulses/sec
-  motorpositions[thisindex] = motorPosn.calcPosn();
-  axlepositions[thisindex] = axlePosn.calcPosn();
+  motorpositions[thisindex] = 0;//THISISBROKEN: use freqmeasuremulti;
+  axlepositions[thisindex] = LaxlePosn.calcPosn();
 
   //take our digital samples
   thisbrake = !digitalRead(DPIN_BRAKE);
@@ -460,7 +469,7 @@ void control()
     throttlepos = min(throttlepos, testramp);
     //this seems like it never turns off our throttle, but it's in a part of the code you can't get to if the throttle psition is less than SERVODEAD to begin with
     throttlepos = max(throttlepos, SERVODEAD);
-    if (autoshift && targetgear<3 && throttlepos>=((SERVOZERO - SERVOMIN)-2))
+    if (autoshift && targetgear < 3 && throttlepos >= ((SERVOZERO - SERVOMIN) - 2))
     {
       autoshiftuptrigger = true;
     }
@@ -497,24 +506,46 @@ void control()
 //------------------------CALCULATION-------------------------------------
 void calculatevalues()
 {
-  int oldrpmindex = thisindex + SAMPLEBUFFERSIZE - 1;
-  while (times[thisindex] - times[(oldrpmindex % SAMPLEBUFFERSIZE)] < (1000 * LOOKBACKTIME_RPM))
-  {
+  /**
+    int oldrpmindex = thisindex + SAMPLEBUFFERSIZE - 1;
+    while (times[thisindex] - times[(oldrpmindex % SAMPLEBUFFERSIZE)] < (1000 * LOOKBACKTIME_RPM))
+    {
     oldrpmindex--;
     if (oldrpmindex <= thisindex)
     {
       oldrpmindex++;
       break;
     }
-  }
-  while (oldrpmindex >= SAMPLEBUFFERSIZE)
-  {
+    }
+    while (oldrpmindex >= SAMPLEBUFFERSIZE)
+    {
     oldrpmindex -= SAMPLEBUFFERSIZE;       //get a valid index inside our sample buffer size
+    }
+    long minuterpmmultiplier = 60000000 / (times[thisindex] - times[oldrpmindex]);
+    prevxpos = motorpositions[oldrpmindex];
+    xpos = motorpositions[thisindex];
+  */
+  if (Lmotor.available() > 0)
+  {
+    rpms = 0;
+    int rpmcount = 0;
+    lastrpmreading = millis();
+    while (Lmotor.available() > 0)
+    {
+      rpms += Lmotor.countToFrequency(Lmotor.read()) * FREQTORPM; //(xpos - prevxpos) * minuterpmmultiplier / COUNTSPERREV;
+      rpmcount++;
+    }
+    rpms/=rpmcount;
   }
-  long minuterpmmultiplier = 60000000 / (times[thisindex] - times[oldrpmindex]);
-  prevxpos = motorpositions[oldrpmindex];
-  xpos = motorpositions[thisindex];
-  rpms = (xpos - prevxpos) * minuterpmmultiplier / COUNTSPERREV;
+  else
+  {
+    if(millis()-LOOKBACKTIME_RPM>lastrpmreading)
+    {
+      lastrpmreading = millis();
+      rpms = 0;
+    }
+  }
+  
   if (rpms != 0)
   {
     if (logratematrix[LOGMATRIX_MOVING] != LOGRATE_MOVING)
@@ -531,7 +562,7 @@ void calculatevalues()
       oneshotcounter = 0;
     }
   }
-  
+
   int oldspeedindex = thisindex + SAMPLEBUFFERSIZE - 1;
   while (times[thisindex] - times[(oldspeedindex % SAMPLEBUFFERSIZE)] < (1000 * LOOKBACKTIME_SPEED))
   {
@@ -563,9 +594,9 @@ void calculatevalues()
   }
   if (velocity != 0)
   {
-    coasting = coastthrottlepos>0;
+    coasting = coastthrottlepos > 0;
     int RPMadder = COASTHYSTERESIS;
-    if(coasting)
+    if (coasting)
     {
       RPMadder = 0;
     }
@@ -578,8 +609,8 @@ void calculatevalues()
     if (thisbrake)
     {
       coastthrottlepos *= COASTBRAKEPERCENTAGE;
-      
-      if (expectedmotorrpms < (2 * (MINCOASTRPM+RPMadder)))
+
+      if (expectedmotorrpms < (2 * (MINCOASTRPM + RPMadder)))
       {
         coastthrottlepos = 0;
       }
@@ -587,7 +618,7 @@ void calculatevalues()
     else
     {
       coastthrottlepos *= COASTPERCENTAGE;
-      if (expectedmotorrpms < (MINCOASTRPM+RPMadder))
+      if (expectedmotorrpms < (MINCOASTRPM + RPMadder))
       {
         coastthrottlepos = 0;
       }
@@ -611,16 +642,16 @@ void calculatevalues()
   if (DEBUGMODE && (thisindex == 0))
   {
     /**
-    byte inbuffert[10];
-    for (int i = 0; i < sizeof(inbuffert); i++)
-    {
+      byte inbuffert[10];
+      for (int i = 0; i < sizeof(inbuffert); i++)
+      {
       inbuffert[i] = 0;
-    }
-    GetServoPosition(SERVO_ID_R);
-    Serial1.readBytes(inbuffert, 8);
-    currentposition = (inbuffert[6] << 8) + inbuffert[5];
-    Serial.println(currentposition);
-    
+      }
+      GetServoPosition(SERVO_ID_R);
+      Serial1.readBytes(inbuffert, 8);
+      currentposition = (inbuffert[6] << 8) + inbuffert[5];
+      Serial.println(currentposition);
+
       float tempcurrent = float(currents[thisindex]) / 10.0;
       Serial.print(thisthrottle);
       Serial.print("%, ");
@@ -635,12 +666,12 @@ void calculatevalues()
       Serial.println(rpms);//motorPosn.calcPosn());//
     */
   }
-  if(gearaction == NOTSHIFTING)
-  throttlepos = max(throttlepos, coastthrottlepos);
-  if(rpms<LOWRPMTHRESHOLD&&rpms>=0)
+  if (gearaction == NOTSHIFTING)
+    throttlepos = max(throttlepos, coastthrottlepos);
+  if (rpms < LOWRPMTHRESHOLD && rpms >= 0)
   {
-    float tempfloat = LOWRPMTHROTTLE*(SERVOZERO-SERVOMIN);
-    throttlepos = min(throttlepos,tempfloat);
+    float tempfloat = LOWRPMTHROTTLE * (SERVOZERO - SERVOMIN);
+    throttlepos = min(throttlepos, tempfloat);
   }
   thiscurrentlimit = map(rpms, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
   thiscurrentlimit = constrain(thiscurrentlimit, MINCURRENTLIMIT, MAXCURRENTLIMIT);
@@ -664,10 +695,10 @@ void calculatevalues()
 
   if (autoshiftuptrigger)
   {
-    int testcurrent = axlerpms * gearratios[targetgear]* 3 / 4;
+    int testcurrent = axlerpms * gearratios[targetgear] * 3 / 4;
     testcurrent = map(testcurrent, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
-    testcurrent = constrain(testcurrent, MINCURRENTLIMIT, MAXCURRENTLIMIT)+50;
-    if(true)//testcurrent>=thiscurrent && thistime - AUTOSHIFTLATENCY > lastautoshift)
+    testcurrent = constrain(testcurrent, MINCURRENTLIMIT, MAXCURRENTLIMIT) + 50;
+    if (true) //testcurrent>=thiscurrent && thistime - AUTOSHIFTLATENCY > lastautoshift)
     {
       thisshiftup = true;
     }
@@ -675,7 +706,7 @@ void calculatevalues()
   }
   else
   {
-    if (autoshift && ((axlerpms*gearratios[targetgear])<2500) && gear>1 && thistime - AUTOSHIFTLATENCY > lastautoshift)
+    if (autoshift && ((axlerpms * gearratios[targetgear]) < 2500) && gear > 1 && thistime - AUTOSHIFTLATENCY > lastautoshift)
     {
       thisshiftdown = true;
     }
@@ -825,10 +856,10 @@ void setup()                                             // run once, when the s
     Serial.println("Begin");
   }
   //update our divisors
-  motorPosn.setup();      // Start Quad Decode position count
-  motorPosn.start();      // Start Quad Decode position count
-  axlePosn.setup();      // Start Quad Decode position count
-  axlePosn.start();      // Start Quad Decode position count
+  //motorPosn.setup();      // Start Quad Decode position count
+  //motorPosn.start();      // Start Quad Decode position count
+  LaxlePosn.setup();      // Start Quad Decode position count
+  LaxlePosn.start();      // Start Quad Decode position count
 
   thrdivisor = float(SERVOMAX - SERVOZERO) / float(THROTTLERANGE);
 
@@ -905,11 +936,12 @@ void setup()                                             // run once, when the s
     Serial.println("GO!");
   }
   delay(250);
+  Lmotor.begin(DPIN_MOTOR_1, FREQMEASUREMULTI_ALTERNATE);
   byte inbuffert[10];
   GetServoPosition(SERVO_ID_R);
-  if(Serial1.readBytes(inbuffert, 8))
+  if (Serial1.readBytes(inbuffert, 8))
   {
-  currentposition = (inbuffert[6] << 8) + inbuffert[5];
+    currentposition = (inbuffert[6] << 8) + inbuffert[5];
   }
   for (int i = 0; i < SAMPLEBUFFERSIZE; i++)
   {
