@@ -1,5 +1,5 @@
 //const byte down7000[] PROGMEM =
-#define SERVOCHECKDELAY 0
+#define SERVOCHECKDELAY 1
 unsigned long lastservocheck = 0;
 int throttlebeforeshift = 0;
 int throttleaftershift = 0;
@@ -190,7 +190,7 @@ void shiftcheck()
           GetServoPosition(SERVO_ID_R);
           Serial1.readBytes(inbuffer1, 8);
           currentposition = (inbuffer1[6] << 8) + inbuffer1[5];
-          int tempint = currentposition - Gearpositions[gear];
+          int tempint = currentposition - Gearpositions[targetgear];
           if ((abs(tempint) < 3) || ((thistime - shifttime) > shifttimeout))
           {
             shiftaction = SHIFTSTAGE_ONGAS;
