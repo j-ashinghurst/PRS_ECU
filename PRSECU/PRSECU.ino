@@ -153,6 +153,7 @@ int targetRPMs = 0;
 unsigned long shifttime = 0;
 boolean autoshift = true;
 boolean autoshiftuptrigger = false;
+boolean gearboxreverse = false;
 // Factory default of Dynamixel servos is ID=1, Baudrate= 1 MegaBaud
 // Factory default of Dynamixel servos is ID=1, Baudrate= 1 MegaBaud
 #define SERVO_ID_L  2
@@ -274,6 +275,7 @@ float expectedmotorrpms = 0;
 boolean coasting = false;
 unsigned long lastrpmreading = 0;
 
+#define RPMLOWCUTOFF  100     //the speed below which we will attempt to go into reverse to shift (since shifting a nonmoving gearbox can damage the gearbox, servo, or other mechanism components
 #define LOWRPMTHRESHOLD  550
 #define LOWRPMTHROTTLE   0.22f
 #define LOOKBACKTIME_RPM  100 //milliseconds, how far back to look to get a baseline for motor RPM.
@@ -483,7 +485,7 @@ void control()
   lastthrottle = throttlepos;
 
   //calculate reverse (required even if we don't use reverse)
-  if (thisreverse)                            //if the driver is holding the reverse button
+  if (thisreverse || gearboxreverse)                          //if the driver is holding the reverse button
   {
     throttlepos = SERVOZERO + (throttlepos / 2); //we don't invert our throttle direction
   }
@@ -535,17 +537,17 @@ void calculatevalues()
       rpms += Lmotor.countToFrequency(Lmotor.read()) * FREQTORPM; //(xpos - prevxpos) * minuterpmmultiplier / COUNTSPERREV;
       rpmcount++;
     }
-    rpms/=rpmcount;
+    rpms /= rpmcount;
   }
   else
   {
-    if(millis()-LOOKBACKTIME_RPM>lastrpmreading)
+    if (millis() - LOOKBACKTIME_RPM > lastrpmreading)
     {
       lastrpmreading = millis();
       rpms = 0;
     }
   }
-  
+
   if (rpms != 0)
   {
     if (logratematrix[LOGMATRIX_MOVING] != LOGRATE_MOVING)
@@ -693,7 +695,7 @@ void calculatevalues()
     }
   }
 
-  if (autoshiftuptrigger)
+  if (autoshiftuptrigger || (autoshift && gear == 0 && rpms > LOWRPMTHRESHOLD))
   {
     int testcurrent = axlerpms * gearratios[targetgear] * 3 / 4;
     testcurrent = map(testcurrent, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);

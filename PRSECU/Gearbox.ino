@@ -78,8 +78,20 @@ void shiftcheck()
         {
           shiftaction = SHIFTSTAGE_OFFGAS;
           targetRPMs = axlerpms * gearratios[targetgear] * 0.9f;
-          throttleaftershift = lastthrottle * 65 / 100;
-          throttlepos = 50;
+
+          if (targetRPMs < RPMLOWCUTOFF)
+          {
+            targetRPMs = 0;
+            gearboxreverse = true;
+            throttleaftershift = 0;
+            throttlepos = 0;
+          }
+          else
+          {
+            throttleaftershift = lastthrottle * 65 / 100;
+            throttlepos = 50;
+          }
+
           justshifted = true;
         }
         else
@@ -125,14 +137,14 @@ void shiftcheck()
           shifttimeout = DOWNSHIFT_OFFGAS_TIMEOUT;
         }
       }
-      if ((rpms > (targetRPMs - RPMTOLERANCE)) && (gearaction == SHIFTINGUP))
+      if ((abs(rpms) > targetRPMs + RPMTOLERANCE) && (gearaction == SHIFTINGUP))
       {
         if ((thistime - shifttime) > shifttimeout)
         {
           //if we've spent too long in this stage, fall through to servo slewing; as long as we've started to get off the gas
           shiftaction = SHIFTSTAGE_SERVOSLEW;
           justshifted = true;
-          if(gearaction == SHIFTINGUP)
+          if (gearaction == SHIFTINGUP)
           {
             throttlepos = throttleaftershift;
           }
@@ -144,9 +156,17 @@ void shiftcheck()
       }
       else
       {
-        //if shifting down, fall through to servo slewing; as long as we've started to get off the gas
-        shiftaction = SHIFTSTAGE_SERVOSLEW;
-        justshifted = true;
+        if (gearboxreverse && targetRPMs == 0)
+        {
+          targetRPMs = RPMLOWCUTOFF;
+          throttlepos = 50;
+        }
+        else
+        {
+          //if shifting down, fall through to servo slewing; as long as we've started to get off the gas
+          shiftaction = SHIFTSTAGE_SERVOSLEW;
+          justshifted = true;
+        }
       }
       break;
     case SHIFTSTAGE_SERVOSLEW:
@@ -160,6 +180,7 @@ void shiftcheck()
       if (justshifted)
       {
         justshifted = false;
+        gearboxreverse = false;
         if (gearaction == SHIFTINGUP)
         {
           SetGoalPosition(SERVO_ID_R, Gearpositions[targetgear]);
