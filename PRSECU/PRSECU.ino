@@ -13,7 +13,6 @@
 #define DEBUGMODE   false  //CAUTION, IF TURNED ON (true) THE CODE WILL WAIT FOR REVERSE PRESS ON BOOT BEFORE DOING ANYTHING ELSE!!  make this true to turn on serial port print statements.
 #define DATALOGGING true
 //This is a pre-made library from sparkfun
-//This is a slight modification of Arduino's built-in servo library
 #include <PulseServo.h>
 #include <CmdMessenger.h>
 #include <FreqMeasureMulti.h>
@@ -76,9 +75,10 @@ long maxthrottlestart =                 0;
 int thisthrottle = 0;
 float coastthrottlepos = throttlepos;
 float thisvoltage = 0;
-#define FULLSCALEVOLTAGE 135.3f
+#define FULLSCALEVOLTAGE 67.7f
 boolean thisbrake = false;
 boolean thisreverse = false;
+boolean rpmavailableflag = false;
 #define RAMPUPRATECONST  0.3f  //ramp up 1uS of throttle output per each 1mS of time
 #define RAMPUPRATESCALE  0.5f  //ramp up 1uS of throttle output per each 1mS of time
 #define GEAR0RAMPSCALER 2.0f
@@ -96,7 +96,7 @@ float lastthrottle = 0;
 #define CURRENTTHRESHOLD  1      //anything below 0.1A is interpreted as 0A
 #define MAXCURRENTLIMIT   400     //50A through a 30A fuse is roughly equivalent to our overcurrent level on a 50A fuse
 #define MINCURRENTLIMIT   30
-#define LIMITCROSSOVERRPM      4000
+#define LIMITCROSSOVERRPM      3800
 #define FUSENOMINAL       .0035f  //nominal fuse resistance during operation: 3.5mOhm
 #define COASTCURRENT3TERM 0.0000000000285f
 #define COASTCURRENT2TERM -0.000000122f
@@ -126,11 +126,11 @@ long thiscurrentlimit = 0;
 #define SHIFTSTAGE_ONGAS      3
 
 #define UPSHIFT_OFFGAS_TIMEOUT  2000000   //2s
-#define UPSHIFT_SLEW_TIMEOUT    500000    //0.5s
-#define UPSHIFT_ONGAS_TIMEOUT   10000     //10ms
+#define UPSHIFT_SLEW_TIMEOUT    200000    //200ms
+#define UPSHIFT_ONGAS_TIMEOUT   250000     //250ms
 
 #define DOWNSHIFT_OFFGAS_TIMEOUT  10000   //10ms
-#define DOWNSHIFT_SLEW_TIMEOUT    500000  //0.5s
+#define DOWNSHIFT_SLEW_TIMEOUT    200000  //200ms
 #define DOWNSHIFT_ONGAS_TIMEOUT   1000000 //1s
 
 #define REVMATCHSCALER 0.9995f             //exponential decay
@@ -151,19 +151,20 @@ boolean thisshiftup = false;
 boolean thisshiftdown = false;
 int targetRPMs = 0;
 unsigned long shifttime = 0;
-boolean autoshift = true;
+boolean autoshift = false;
 boolean autoshiftuptrigger = false;
 boolean gearboxreverse = false;
+float thisshiftthrottle = 0;
 // Factory default of Dynamixel servos is ID=1, Baudrate= 1 MegaBaud
 // Factory default of Dynamixel servos is ID=1, Baudrate= 1 MegaBaud
 #define SERVO_ID_L  2
 #define SERVO_ID_R  2
 #define SERVO_ID_BROADCAST  254
 #define BAUDRATE  19200
-#define GEAR0POSITION 434
-#define GEAR1POSITION 670
-#define GEAR2POSITION 528
-#define GEAR3POSITION 285
+#define GEAR0POSITION 558
+#define GEAR1POSITION 300
+#define GEAR2POSITION 474
+#define GEAR3POSITION 668
 #define CWDIR false
 #define CCWDIR true
 #define ECHOTIMEOUT 10
@@ -278,6 +279,7 @@ unsigned long lastrpmreading = 0;
 #define RPMLOWCUTOFF  100     //the speed below which we will attempt to go into reverse to shift (since shifting a nonmoving gearbox can damage the gearbox, servo, or other mechanism components
 #define LOWRPMTHRESHOLD  550
 #define LOWRPMTHROTTLE   0.22f
+#define RPMHIGHLIMIT 8000.0f
 #define LOOKBACKTIME_RPM  100 //milliseconds, how far back to look to get a baseline for motor RPM.
 #define LOOKBACKTIME_SPEED  60 //milliseconds, how far back to look to get a baseline for speed.
 #define LOOPTIME 1  //ENCODER SHOULD BE ANSWERED EVERY 8K COUNTS *max*.  For motors, at 7100RPM/4096 counts per rev, this is ~16ms.  10 should be OK.  For axles, at 10ms this works out to 229 counts per interval per 10mph
@@ -305,13 +307,18 @@ boolean speedsensing = false;
 
 
 
-#define THROTTLERPMCALPOINT 53.4
+#define THROTTLERPMCALPOINT 53.4f
 #define COASTPERCENTAGE 0.80f
-#define COASTBRAKEPERCENTAGE 0.50f
+#define COASTBRAKEOFFSET 50
 #define MINCOASTRPM  1000
 #define COASTHYSTERESIS 250
 //------------------------GENERIC VARIABLES--------------------
 
+#define BUTTONDEBOUNCETIME 10000
+boolean shiftupdebounce = false;
+boolean shiftdowndebounce = false;
+unsigned long updebouncetime = 0;
+unsigned long downdebouncetime = 0;
 float thrdivisor = (SERVOMAX - SERVOZERO) / THROTTLERANGE;
 #define ADCBITS           10
 #define FULLSCALEADC      1024          //CURRENT LIMITING  //why yes, that is a 10-bit ADC in my pocket
@@ -319,12 +326,10 @@ float thrdivisor = (SERVOMAX - SERVOZERO) / THROTTLERANGE;
 //
 //INSTANTIATIONS
 PulseServo myservo;          //the output is basically just a servo output, specially-controlled
-//Servo myservo;
 
 FreqMeasureMulti Lmotor;
-QuadDecode<2> LaxlePosn;  // Template using FTM2
-FreqMeasureMulti Rmotor;
-QuadDecode<1> RaxlePosn;  // Template using FTM1
+QuadDecode<1> LaxlePosn;  // Template using FTM2
+
 
 //------------------------ANALOG SAMPLING-------------------------------------
 //
@@ -350,8 +355,57 @@ void sample()
   //take our digital samples
   thisbrake = !digitalRead(DPIN_BRAKE);
   //thisreverse = !digitalRead(DPIN_REVERSE);
-  thisshiftup = !digitalRead(DPIN_SHIFTUP);
-  thisshiftdown = !digitalRead(DPIN_SHIFTDOWN);
+  autoshift = false;
+  thisshiftup = false;
+  thisshiftdown = false;
+  if (!digitalRead(DPIN_SHIFTUP))
+  {
+    if (!digitalRead(DPIN_SHIFTDOWN))
+    { //if both are pressed/switched together, auto shift.  best not to actuate this during operation, only when off.
+      shiftupdebounce = false;
+      shiftdowndebounce = false;
+    }
+    else
+    {
+      if (!shiftupdebounce)
+      {
+        shiftupdebounce = true;
+        shiftdowndebounce = false;
+        updebouncetime = micros();
+      }
+      else
+      {
+        if (micros() - updebouncetime > BUTTONDEBOUNCETIME)
+        {
+          thisshiftup = true;
+        }
+      }
+    }
+  }
+  else
+  {
+    shiftupdebounce = false;
+    if (!digitalRead(DPIN_SHIFTDOWN))
+    {
+      if (!shiftdowndebounce)
+      {
+        shiftdowndebounce = true;
+        shiftupdebounce = false;
+        downdebouncetime = micros();
+      }
+      else
+      {
+        if (micros() - downdebouncetime > BUTTONDEBOUNCETIME)
+        {
+          thisshiftdown = true;
+        }
+      }
+    }
+    else
+    {
+      shiftdowndebounce = false;
+    }
+  }
 
   //reset our analog readings
   thiscurrent = 0;
@@ -393,13 +447,14 @@ void sample()
   */
   //run our divider to get us in the uS range rather than ADC range for our control loop
   throttlepos = float( thisthrottle) * thrdivisor;
-  if (thisbrake)
-  {
+  /*
+    if (thisbrake)
+    {
     //apply braking power to the RC line
     throttlepos = BRAKEPOWER;
-  }
-  //Serial.print(throttlepos);
-
+    }
+    Serial.print(throttlepos);
+  */
   //change our log rate  and detect an event when the throttle is pulled and also when it is released
   if (thisthrottle > 0)
   {
@@ -428,7 +483,6 @@ void sample()
 //------------------------CURRENT AND THROTTLE LIMTING-------------------------------------
 void control()
 {
-  //this is set to detect a brake switch closing and choose how to modify our throttle
 
   //this catches a throttle of technically less than zero (outside SERVODEAD-SERVOMAX range) and tells it to be zero for our display
   if (throttlepos < SERVODEAD)
@@ -456,7 +510,18 @@ void control()
   else
   {
     //the test ramp rate is governed by our current gear, a constatnt ramp rate, and a ramp rate scalar that varies based on how close to full throttle we are
-    float testramp = gearrampscalers[gear] * (RAMPUPRATECONST + RAMPUPRATESCALE * (1 - lastthrottle / (SERVOZERO - SERVOMIN)));
+    float testramp = 0;
+    if (gear != GEARUNDEFINED)
+    {
+      testramp = gearrampscalers[gear] * (RAMPUPRATECONST + RAMPUPRATESCALE * (1 - lastthrottle / (SERVOZERO - SERVOMIN)));
+    }
+    else
+    {
+      if (gearaction == SHIFTINGUP && shiftaction == SHIFTSTAGE_SERVOSLEW)
+      {
+        testramp = 2 * gearrampscalers[targetgear] * (RAMPUPRATECONST + RAMPUPRATESCALE * (1 - lastthrottle / (SERVOZERO - SERVOMIN)));
+      }
+    }
     //scale the ramp rate by how long it's been since we last went through the loop.
     if (thisindex == 0)
     {
@@ -527,8 +592,11 @@ void calculatevalues()
     prevxpos = motorpositions[oldrpmindex];
     xpos = motorpositions[thisindex];
   */
+
   if (Lmotor.available() > 0)
   {
+    rpmavailableflag = true;
+    float lastrpms = rpms;
     rpms = 0;
     int rpmcount = 0;
     lastrpmreading = millis();
@@ -538,12 +606,17 @@ void calculatevalues()
       rpmcount++;
     }
     rpms /= rpmcount;
+    if (rpms > RPMHIGHLIMIT)
+    {
+      rpms = lastrpms;
+    }
   }
   else
   {
-    if (millis() - LOOKBACKTIME_RPM > lastrpmreading)
+    if ((millis() - LOOKBACKTIME_RPM) > lastrpmreading)
     {
-      lastrpmreading = millis();
+      rpmavailableflag = false;
+      //lastrpmreading = millis();
       rpms = 0;
     }
   }
@@ -592,7 +665,14 @@ void calculatevalues()
   }
   else
   {
-    expectedmotorrpms = 0;
+    if (gearaction != NOTSHIFTING)
+    {
+      expectedmotorrpms = axlerpms * gearratios[targetgear];
+    }
+    else
+    {
+      expectedmotorrpms = 0;
+    }
   }
   if (velocity != 0)
   {
@@ -607,10 +687,10 @@ void calculatevalues()
     float term2 = pow(expectedmotorrpms, 2) * THROTTLERPM2TERM;
     float term1 = expectedmotorrpms * THROTTLERPM1TERM;
     float term0 = THROTTLERPM4TERM;
-    coastthrottlepos = (term4 + term3 + term2 + term1 + term0) * thisvoltage * (SERVOZERO - SERVOMIN) / (THROTTLERPMCALPOINT * PERCENT);
+    coastthrottlepos = (term4 + term3 + term2 + term1 + term0) * 39.0f * (SERVOZERO - SERVOMIN) / (THROTTLERPMCALPOINT * PERCENT);
     if (thisbrake)
     {
-      coastthrottlepos *= COASTBRAKEPERCENTAGE;
+      coastthrottlepos -= COASTBRAKEOFFSET;
 
       if (expectedmotorrpms < (2 * (MINCOASTRPM + RPMadder)))
       {
@@ -643,39 +723,46 @@ void calculatevalues()
 
   if (DEBUGMODE && (thisindex == 0))
   {
-    /**
-      byte inbuffert[10];
-      for (int i = 0; i < sizeof(inbuffert); i++)
-      {
+
+    byte inbuffert[10];
+    for (int i = 0; i < sizeof(inbuffert); i++)
+    {
       inbuffert[i] = 0;
-      }
-      GetServoPosition(SERVO_ID_R);
-      Serial1.readBytes(inbuffert, 8);
-      currentposition = (inbuffert[6] << 8) + inbuffert[5];
-      Serial.println(currentposition);
+    }
+    GetServoPosition(SERVO_ID_R);
+    Serial1.readBytes(inbuffert, 8);
+    currentposition = (inbuffert[6] << 8) + inbuffert[5];
+    Serial.println(currentposition);
 
-      float tempcurrent = float(currents[thisindex]) / 10.0;
-      Serial.print(thisthrottle);
-      Serial.print("%, ");
-      Serial.print(throttlepos);
-      Serial.print("A, RPM: ");
-      Serial.println(velocity);//motorPosn.calcPosn());//
+    float tempcurrent = float(currents[thisindex]) / 10.0;
+    Serial.print(thisthrottle);
+    Serial.print("%, ");
+    Serial.print(tempcurrent);
+    Serial.print("A, RPM: ");
+    Serial.println(velocity);//motorPosn.calcPosn());//
 
-      Serial.print(times[thisindex]);
-      Serial.print(": ");
-      Serial.print(xpos);
-      Serial.print(": RPM: ");
-      Serial.println(rpms);//motorPosn.calcPosn());//
-    */
+    Serial.print(times[thisindex]);
+    Serial.print(": ");
+    Serial.print(xpos);
+    Serial.print(": RPM: ");
+    if (rpmavailableflag)
+    {
+      Serial.print("+");
+    }
+    Serial.println(rpms);//motorPosn.calcPosn());//
+
   }
   if (gearaction == NOTSHIFTING)
+  {
     throttlepos = max(throttlepos, coastthrottlepos);
+  }
   if (rpms < LOWRPMTHRESHOLD && rpms >= 0)
   {
     float tempfloat = LOWRPMTHROTTLE * (SERVOZERO - SERVOMIN);
     throttlepos = min(throttlepos, tempfloat);
   }
-  thiscurrentlimit = map(rpms, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
+  long rpmtemplong = rpms;
+  thiscurrentlimit = map(rpmtemplong, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
   thiscurrentlimit = constrain(thiscurrentlimit, MINCURRENTLIMIT, MAXCURRENTLIMIT);
   if (currents[thisindex] > thiscurrentlimit)
   {
@@ -700,7 +787,7 @@ void calculatevalues()
     int testcurrent = axlerpms * gearratios[targetgear] * 3 / 4;
     testcurrent = map(testcurrent, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
     testcurrent = constrain(testcurrent, MINCURRENTLIMIT, MAXCURRENTLIMIT) + 50;
-    if (true) //testcurrent>=thiscurrent && thistime - AUTOSHIFTLATENCY > lastautoshift)
+    if (testcurrent >= thiscurrent && thistime - AUTOSHIFTLATENCY > lastautoshift)
     {
       thisshiftup = true;
     }
@@ -766,7 +853,8 @@ void datalog()
     if (!datalogging)
     {
       datalogging = true;
-      logstring = "TIME,THROTTLE IN,THROTTLE OUT,CURRENT,LIMIT,VOLTAGE,RPM,SPEED,GEAR,SERVOPOS,\n";
+      //logstring = "TIME,THROTTLE IN,THROTTLE OUT,SHIFT THROTTLE,CURRENT,LIMIT,VOLTAGE,RPM,SPEED,GEAR,SERVOPOS\n";
+      logstring = "TIME,THROTTLE IN,THROTTLE OUT,CURRENT,LIMIT,RPM,SPEED,GEAR,SERVOPOS\n";
     }
     else
     {
@@ -774,9 +862,10 @@ void datalog()
       String tempstring = String(String(millistime) + ","
                                  + String(100.0 * float(thisthrottle) / float(THROTTLERANGE)) + ","
                                  + String(float(SERVOZERO - throttlepos)) + ","
+                                 //+ String(thisshiftthrottle) + ","
                                  + String(float(currents[thisindex]) / 10.0) + ","
                                  + String(float(thiscurrentlimit) / 10.0) + ","
-                                 + String(thisvoltage) + ","
+                                 //+ String(thisvoltage) + ","
                                  + String(rpms) + ","
                                  + String(velocity) + ","
                                  + String(gear) + ","
@@ -911,7 +1000,7 @@ void setup()                                             // run once, when the s
   delay(10);
   SetMovingSpeed(SERVO_ID_BROADCAST, 1023);
   delay(10);
-  SetTorqueLimit(SERVO_ID_BROADCAST, 768);
+  SetTorqueLimit(SERVO_ID_BROADCAST, 700);
   delay(10);
   SetTorqueEnable(SERVO_ID_BROADCAST, true);
   delay(10);

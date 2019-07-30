@@ -1,13 +1,15 @@
-//const byte down7000[] PROGMEM =
 #define SERVOCHECKDELAY 1
 unsigned long lastservocheck = 0;
 int throttlebeforeshift = 0;
 int throttleaftershift = 0;
 void shiftcheck()
 {
+  thisshiftthrottle = lastthrottle;
   if (shiftmask && (gearaction == NOTSHIFTING))
   {
-    if (thisshiftup) //the shift up button has been pressed or an autoshift triggered
+    Serial1.clear();
+    GetServoPosition(SERVO_ID_R);
+    if (thisshiftup && gear == targetgear) //the shift up button has been pressed or an autoshift triggered
     {
       shiftmask = false;
       justshifted = true;
@@ -34,7 +36,7 @@ void shiftcheck()
     }
     else
     {
-      if (thisshiftdown) //the shift down button has been pressed
+      if (thisshiftdown && gear == targetgear) //the shift down button has been pressed
       {
         shiftmask = false;
         justshifted = true;
@@ -45,8 +47,11 @@ void shiftcheck()
             gearaction = NOTSHIFTING;
             break;
           case GEARONE:
-            gear = GEARUNDEFINED;
-            targetgear = GEARNEUTRAL;
+            justshifted = false;
+            gearaction = NOTSHIFTING;
+
+            //gear = GEARUNDEFINED;
+            //targetgear = GEARNEUTRAL;
             break;
           case GEARTWO:
             gear = GEARUNDEFINED;
@@ -77,7 +82,7 @@ void shiftcheck()
         if (gearaction == SHIFTINGUP)
         {
           shiftaction = SHIFTSTAGE_OFFGAS;
-          targetRPMs = axlerpms * gearratios[targetgear] * 0.9f;
+          targetRPMs = axlerpms * gearratios[targetgear] * 0.95f;
 
           if (targetRPMs < RPMLOWCUTOFF)
           {
@@ -127,6 +132,18 @@ void shiftcheck()
         justshifted = false;
         shifttime = thistime;
         shifttimeout = UPSHIFT_OFFGAS_TIMEOUT;
+        /*
+          if (targetgear == GEARTHREE)
+          {
+          if (GEAR3POSITION > GEAR2POSITION)
+          {
+            SetGoalPosition(SERVO_ID_R, Gearpositions[GEARNEUTRAL] - 25);
+          }
+          else
+          {
+            SetGoalPosition(SERVO_ID_R, Gearpositions[GEARNEUTRAL] + 25);
+          }
+          }*/
       }
       else
       {
@@ -137,7 +154,7 @@ void shiftcheck()
           shifttimeout = DOWNSHIFT_OFFGAS_TIMEOUT;
         }
       }
-      if ((abs(rpms) > targetRPMs + RPMTOLERANCE) && (gearaction == SHIFTINGUP))
+      if ((abs(rpms) > targetRPMs /*+ RPMTOLERANCE*/) && (gearaction == SHIFTINGUP))
       {
         if ((thistime - shifttime) > shifttimeout)
         {
@@ -147,6 +164,7 @@ void shiftcheck()
           if (gearaction == SHIFTINGUP)
           {
             throttlepos = throttleaftershift;
+            thisshiftthrottle = throttlepos;
           }
         }
         else
@@ -159,12 +177,18 @@ void shiftcheck()
         if (gearboxreverse && targetRPMs == 0)
         {
           targetRPMs = RPMLOWCUTOFF;
-          throttlepos = 50;
+          throttlepos = 75;
+          thisshiftthrottle = throttlepos;
         }
         else
         {
           //if shifting down, fall through to servo slewing; as long as we've started to get off the gas
           shiftaction = SHIFTSTAGE_SERVOSLEW;
+          if (gearaction == SHIFTINGUP)
+          {
+            throttlepos = throttleaftershift;
+            thisshiftthrottle = throttlepos;
+          }
           justshifted = true;
         }
       }
@@ -176,7 +200,16 @@ void shiftcheck()
         Serial.print(", Servo Slewing: ");
         Serial.println(millis());
       }
-      throttlepos = lastthrottle;
+      if (gearaction == SHIFTINGUP)
+      {
+        throttlepos = throttleaftershift;
+        thisshiftthrottle = throttlepos;
+      }
+      else
+      {
+        throttlepos = lastthrottle;
+        thisshiftthrottle = throttlepos;
+      }
       if (justshifted)
       {
         justshifted = false;
@@ -186,6 +219,7 @@ void shiftcheck()
           SetGoalPosition(SERVO_ID_R, Gearpositions[targetgear]);
           shifttime = thistime;
           shifttimeout = UPSHIFT_SLEW_TIMEOUT;
+
           break;
         }
         else
@@ -208,6 +242,7 @@ void shiftcheck()
           {
             inbuffer1[i] = 0;
           }
+          Serial1.clear();
           GetServoPosition(SERVO_ID_R);
           Serial1.readBytes(inbuffer1, 8);
           currentposition = (inbuffer1[6] << 8) + inbuffer1[5];
@@ -224,14 +259,14 @@ void shiftcheck()
       }
       break;
     case SHIFTSTAGE_ONGAS:
-      if (DEBUGMODE && justshifted)
-      {
-        Serial.print("End Shift: ");
-        Serial.println(millis());
-      }
       if (justshifted)
       {
         justshifted = false;
+        if (DEBUGMODE)
+        {
+          Serial.print("End Shift: ");
+          Serial.println(millis());
+        }
         if (gearaction == SHIFTINGUP)
         {
           shifttime = thistime;
@@ -243,8 +278,6 @@ void shiftcheck()
         {
           if (gearaction == SHIFTINGDOWN)
           {
-            targetRPMs = targetRPMs * 13 / 10;
-            throttlepos = lastthrottle + 13 / 10;
             shifttime = thistime;
             shifttimeout = DOWNSHIFT_ONGAS_TIMEOUT;
           }
