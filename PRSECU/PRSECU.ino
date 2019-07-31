@@ -1,5 +1,7 @@
 
 
+
+
 /**TO-DO:
    Better RPM Measurement during shift RPM change verification (minimum time period required to get within RPMTOLERANCE)
    Implement datalogging
@@ -14,8 +16,8 @@
 #define DATALOGGING true
 //This is a pre-made library from sparkfun
 #include <PulseServo.h>
-#include <CmdMessenger.h>
 #include <FreqMeasureMulti.h>
+#include <SimpleKalmanFilter.h>
 
 #define DPIN_RX             0
 #define DPIN_TX             1
@@ -52,7 +54,7 @@ unsigned long serialtime =    1;
 #include "Datalog_Defs.h"
 //--------------------------------THROTTLE INPUT AND OUTPUT----------------------------
 #define THROTTLEMIN               20
-#define THROTTLEMAX               700
+#define THROTTLEMAX               600
 #define SERVODEAD                 16                         //THROTTLE INPUT AND OUTPUT  //space between this and the zero band won't be sent because it will cause odd behavior with the ESC
 #define SERVOHYSTERESIS           11                          //wont turn off below SERVODEAD until we're this much below the dead zone
 #define SERVOOFFSET               0
@@ -94,17 +96,16 @@ float lastthrottle = 0;
 #define FULLSCALECURRENT      1391    //139.1A full scale
 #define CURRENTOFFSET     -3       //subtract 0.9A from current reading
 #define CURRENTTHRESHOLD  1      //anything below 0.1A is interpreted as 0A
-#define MAXCURRENTLIMIT   400     //50A through a 30A fuse is roughly equivalent to our overcurrent level on a 50A fuse
+#define MAXCURRENTLIMIT   450     //50A through a 30A fuse is roughly equivalent to our overcurrent level on a 50A fuse
 #define MINCURRENTLIMIT   30
-#define LIMITCROSSOVERRPM      3800
+#define MINLIMITCROSSOVERRPM  500
+#define MAXLIMITCROSSOVERRPM  2000
 #define FUSENOMINAL       .0035f  //nominal fuse resistance during operation: 3.5mOhm
 #define COASTCURRENT3TERM 0.0000000000285f
 #define COASTCURRENT2TERM -0.000000122f
 #define COASTCURRENT1TERM 0.000857f
 #define COASTCURRENT0TERM 1.185f //data shows the average is 0.185.  have added 1A  to ensure we always stay below this limit
 
-#define MAXCOASTCURRENTLIMIT 65
-#define COASTCROSSOVERRPM 7000
 int currents[SAMPLEBUFFERSIZE];
 float thiscurrent = 0;
 long thiscurrentlimit = 0;
@@ -314,7 +315,7 @@ boolean speedsensing = false;
 #define COASTHYSTERESIS 250
 //------------------------GENERIC VARIABLES--------------------
 
-#define BUTTONDEBOUNCETIME 10000
+#define BUTTONDEBOUNCETIME 20000  //20ms
 boolean shiftupdebounce = false;
 boolean shiftdowndebounce = false;
 unsigned long updebouncetime = 0;
@@ -441,10 +442,10 @@ void sample()
   thisthrottle = thisthrottle - THROTTLEMIN;                //invert the range (so that a disconnected pot = zero throttle)
   thisthrottle = constrain( thisthrottle, 0, THROTTLERANGE); //make sure we stay in bounds
 
-  /*//applies an exponential curve to give more sensitivity at lower throttle inputs.  may not be required with 3-speed gearbox
-    thisthrottle *= thisthrottle;
-    thisthrottle /= THROTTLERANGE;
-  */
+  //applies an exponential curve to give more sensitivity at lower throttle inputs.  may not be required with 3-speed gearbox
+  thisthrottle *= thisthrottle;
+  thisthrottle /= THROTTLERANGE;
+
   //run our divider to get us in the uS range rather than ADC range for our control loop
   throttlepos = float( thisthrottle) * thrdivisor;
   /*
@@ -762,7 +763,7 @@ void calculatevalues()
     throttlepos = min(throttlepos, tempfloat);
   }
   long rpmtemplong = rpms;
-  thiscurrentlimit = map(rpmtemplong, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
+  thiscurrentlimit = map(rpmtemplong, MINLIMITCROSSOVERRPM, MAXLIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
   thiscurrentlimit = constrain(thiscurrentlimit, MINCURRENTLIMIT, MAXCURRENTLIMIT);
   if (currents[thisindex] > thiscurrentlimit)
   {
