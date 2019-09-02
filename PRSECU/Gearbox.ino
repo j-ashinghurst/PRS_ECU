@@ -82,7 +82,7 @@ void shiftcheck()
         if (gearaction == SHIFTINGUP)
         {
           shiftaction = SHIFTSTAGE_OFFGAS;
-          targetRPMs = axlerpms * gearratios[targetgear] * 0.95f;
+          targetRPMs = axlerpms * gearratios[targetgear] * 0.9f;
 
           if (targetRPMs < RPMLOWCUTOFF)
           {
@@ -93,8 +93,8 @@ void shiftcheck()
           }
           else
           {
-            throttleaftershift = lastthrottle * 65 / 100;
-            throttlepos = 50;
+            throttleaftershift = getThrottlefromRPM(targetRPMs, thisvoltage);
+            throttlepos = throttleaftershift;
           }
 
           justshifted = true;
@@ -154,7 +154,8 @@ void shiftcheck()
           shifttimeout = DOWNSHIFT_OFFGAS_TIMEOUT;
         }
       }
-      if ((abs(rpms) > targetRPMs /*+ RPMTOLERANCE*/) && (gearaction == SHIFTINGUP))
+      if (false)
+      //if ((abs(rpms) > targetRPMs /*+ RPMTOLERANCE*/) && (gearaction == SHIFTINGUP))
       {
         if ((thistime - shifttime) > shifttimeout)
         {
@@ -289,5 +290,25 @@ void shiftcheck()
         shiftaction = SHIFTIDLE;
       }
       break;
+  }
+}
+
+float getThrottlefromRPM(float inRPM, float inVoltage)
+{
+  inRPM /= inVoltage;
+  if ((inRPM) < MAPPINGLOWCUTOFF)
+  {
+    return 0.0;
+  }
+  else
+  {
+    float term4 = pow(inRPM, 4) * THROTTLERPM4TERM;
+    float term3 = pow(inRPM, 3) * THROTTLERPM3TERM;
+    float term2 = pow(inRPM, 2) * THROTTLERPM2TERM;
+    float term1 = inRPM * THROTTLERPM1TERM;
+    float term0 = THROTTLERPM0TERM;
+    
+    float outputThrottle = (term4 + term3 + term2 + term1 + term0);
+    return outputThrottle;
   }
 }

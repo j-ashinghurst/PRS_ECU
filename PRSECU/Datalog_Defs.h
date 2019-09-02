@@ -76,10 +76,10 @@ struct Datastruct mydata[] =  {
   {LOG_ACCX,          "ACCEL-X",          "g",        false, false, 2, 9, 0, 0, 0},
   {LOG_ACCY,          "ACCEL-Y",          "g",        false, false, 2, 9, 0, 0, 0},
   {LOG_ACCZ,          "ACCEL-Z",          "g",        false, false, 2, 9, 0, 0, 0},
-  {LOG_ROTX,          "ROTATION-X",       "*/s",      false, false, 1, 9, 0, 0, 0},
-  {LOG_ROTY,          "ROTATION-Y",       "*/s",      false, false, 1, 9, 0, 0, 0},
-  {LOG_ROTZ,          "ROTATION-Z",       "*/s",      false, false, 1, 9, 0, 0, 0},
-  {LOG_STEER,         "STEERING ANGLE",   "*",        false, false, 1, 9, 0, 0, 0},
+  {LOG_ROTX,          "ROTATION-X",       "°/s",      false, false, 1, 9, 0, 0, 0},
+  {LOG_ROTY,          "ROTATION-Y",       "°/s",      false, false, 1, 9, 0, 0, 0},
+  {LOG_ROTZ,          "ROTATION-Z",       "°/s",      false, false, 1, 9, 0, 0, 0},
+  {LOG_STEER,         "STEERING ANGLE",   "°",        false, false, 1, 9, 0, 0, 0},
   {LOG_CPU,           "CPU USAGE",        "%",        false, false, 0, 4, 0, 0, 0}
 };
 

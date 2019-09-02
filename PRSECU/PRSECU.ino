@@ -81,8 +81,8 @@ float thisvoltage = 0;
 boolean thisbrake = false;
 boolean thisreverse = false;
 boolean rpmavailableflag = false;
-#define RAMPUPRATECONST  0.3f  //ramp up 1uS of throttle output per each 1mS of time
-#define RAMPUPRATESCALE  0.5f  //ramp up 1uS of throttle output per each 1mS of time
+#define RAMPUPRATECONST  0.4f  //ramp up 1uS of throttle output per each 1mS of time
+#define RAMPUPRATESCALE  0.6f  //ramp up 1uS of throttle output per each 1mS of time
 #define GEAR0RAMPSCALER 2.0f
 #define GEAR1RAMPSCALER 1.33f
 #define GEAR2RAMPSCALER 1.0f
@@ -95,11 +95,11 @@ float lastthrottle = 0;
 
 #define FULLSCALECURRENT      1391    //139.1A full scale
 #define CURRENTOFFSET     -3       //subtract 0.9A from current reading
-#define CURRENTTHRESHOLD  1      //anything below 0.1A is interpreted as 0A
-#define MAXCURRENTLIMIT   450     //50A through a 30A fuse is roughly equivalent to our overcurrent level on a 50A fuse
+#define CURRENTTHRESHOLD  2      //anything beluow 0.1A is interpreted as 0A
+#define MAXCURRENTLIMIT   500     //50A through a 30A fuse is roughly equivalent to our overcurrent level on a 50A fuse
 #define MINCURRENTLIMIT   30
-#define MINLIMITCROSSOVERRPM  500
-#define MAXLIMITCROSSOVERRPM  2000
+#define MINLIMITCROSSOVERRPM  700
+#define MAXLIMITCROSSOVERRPM  2500
 #define FUSENOMINAL       .0035f  //nominal fuse resistance during operation: 3.5mOhm
 #define COASTCURRENT3TERM 0.0000000000285f
 #define COASTCURRENT2TERM -0.000000122f
@@ -292,24 +292,30 @@ unsigned long lastrpmreading = 0;
 #define SPEEDRPMFACTOR 33.61f
 #define FREQTORPM 2.85714f//1.4286f   //returning 1Hz results in ~1.4RPM, with 42 increments per rotation it takes 42 seconds to make one rotation at 1Hz between commutations
 #define MOTORKV 130
-#define GEAR0RATIO  8.348f   //defined this way (95% of third) so we can jump to *any* gear from neutral and the motor will always be spinning slow enough
-#define GEAR1RATIO  15.623f
-#define GEAR2RATIO  11.717f
-#define GEAR3RATIO  8.7879f
+#define MOTORSPROCKET       9.0f
+#define GEARHUBINSPROCKET   29.0f
+#define GEARHUBOUTSPROCKET  19.0f
+#define AXLESPROCKET        59.0f
+#define GEAR2RATIO  AXLESPROCKET*GEARHUBINSPROCKET/(MOTORSPROCKET*GEARHUBOUTSPROCKET)   //defined this way (95% of third) so we can jump to *any* gear from neutral and the motor will always be spinning slow enough
+#define GEAR1RATIO  GEAR2RATIO*1.33f
+#define GEAR3RATIO  GEAR2RATIO*0.75f
+#define GEAR0RATIO  GEAR3RATIO*0.95f
+
 float gearratios[] = {GEAR0RATIO, GEAR1RATIO, GEAR2RATIO, GEAR3RATIO};
 
 boolean speedsensing = false;
 
-#define THROTTLERPM4TERM  -0.000000000000167f
-#define THROTTLERPM3TERM  0.00000000238f
-#define THROTTLERPM2TERM  -0.00000951f
-#define THROTTLERPM1TERM  0.0224f
-#define THROTTLERPM0TERM  0.0f
+#define THROTTLERPM4TERM  -0.000009035f
+#define THROTTLERPM3TERM  0.002797f
+#define THROTTLERPM2TERM  -0.2821f
+#define THROTTLERPM1TERM  13.75f
+#define THROTTLERPM0TERM  -166.6f
+#define MAPPINGLOWCUTOFF  40.0f     //RPM/VOLTAGE can't go below this number, otherwise our trendline is invalid
 
 
 
 #define THROTTLERPMCALPOINT 53.4f
-#define COASTPERCENTAGE 0.80f
+#define COASTPERCENTAGE 0.90f
 #define COASTBRAKEOFFSET 50
 #define MINCOASTRPM  1000
 #define COASTHYSTERESIS 250
@@ -683,16 +689,13 @@ void calculatevalues()
     {
       RPMadder = 0;
     }
-    float term4 = pow(expectedmotorrpms, 4) * THROTTLERPM4TERM;
-    float term3 = pow(expectedmotorrpms, 3) * THROTTLERPM3TERM;
-    float term2 = pow(expectedmotorrpms, 2) * THROTTLERPM2TERM;
-    float term1 = expectedmotorrpms * THROTTLERPM1TERM;
-    float term0 = THROTTLERPM4TERM;
-    coastthrottlepos = (term4 + term3 + term2 + term1 + term0) * 39.0f * (SERVOZERO - SERVOMIN) / (THROTTLERPMCALPOINT * PERCENT);
+    
+    coastthrottlepos = getThrottlefromRPM(expectedmotorrpms, thisvoltage);
     if (thisbrake)
     {
+      coastthrottlepos *= COASTPERCENTAGE;
       coastthrottlepos -= COASTBRAKEOFFSET;
-
+      
       if (expectedmotorrpms < (2 * (MINCOASTRPM + RPMadder)))
       {
         coastthrottlepos = 0;
@@ -786,8 +789,8 @@ void calculatevalues()
   if (autoshiftuptrigger || (autoshift && gear == 0 && rpms > LOWRPMTHRESHOLD))
   {
     int testcurrent = axlerpms * gearratios[targetgear] * 3 / 4;
-    testcurrent = map(testcurrent, 0, LIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
-    testcurrent = constrain(testcurrent, MINCURRENTLIMIT, MAXCURRENTLIMIT) + 50;
+    testcurrent = map(testcurrent, MINLIMITCROSSOVERRPM, MAXLIMITCROSSOVERRPM, MINCURRENTLIMIT, MAXCURRENTLIMIT);
+    testcurrent = constrain(testcurrent, MINCURRENTLIMIT, MAXCURRENTLIMIT);
     if (testcurrent >= thiscurrent && thistime - AUTOSHIFTLATENCY > lastautoshift)
     {
       thisshiftup = true;
@@ -820,6 +823,7 @@ void calculatevalues()
     }
   }
 }
+
 
 //------------------------DATALOGGING-------------------------------------
 //
@@ -854,8 +858,8 @@ void datalog()
     if (!datalogging)
     {
       datalogging = true;
-      //logstring = "TIME,THROTTLE IN,THROTTLE OUT,SHIFT THROTTLE,CURRENT,LIMIT,VOLTAGE,RPM,SPEED,GEAR,SERVOPOS\n";
-      logstring = "TIME,THROTTLE IN,THROTTLE OUT,CURRENT,LIMIT,RPM,SPEED,GEAR,SERVOPOS\n";
+      logstring = "TIME,THROTTLE IN,THROTTLE OUT,CURRENT,LIMIT,VOLTAGE,RPM,SPEED,GEAR,SERVOPOS\n";
+      //logstring = "TIME,THROTTLE IN,THROTTLE OUT,CURRENT,LIMIT,RPM,SPEED,GEAR,SERVOPOS\n";
     }
     else
     {
@@ -866,7 +870,7 @@ void datalog()
                                  //+ String(thisshiftthrottle) + ","
                                  + String(float(currents[thisindex]) / 10.0) + ","
                                  + String(float(thiscurrentlimit) / 10.0) + ","
-                                 //+ String(thisvoltage) + ","
+                                 + String(thisvoltage) + ","
                                  + String(rpms) + ","
                                  + String(velocity) + ","
                                  + String(gear) + ","
@@ -1001,7 +1005,7 @@ void setup()                                             // run once, when the s
   delay(10);
   SetMovingSpeed(SERVO_ID_BROADCAST, 1023);
   delay(10);
-  SetTorqueLimit(SERVO_ID_BROADCAST, 700);
+  SetTorqueLimit(SERVO_ID_BROADCAST, 1023);
   delay(10);
   SetTorqueEnable(SERVO_ID_BROADCAST, true);
   delay(10);
