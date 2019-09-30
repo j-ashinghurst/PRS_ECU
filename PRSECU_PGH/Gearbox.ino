@@ -28,6 +28,7 @@ void shiftcheck()
           targetgear = GEARTHREE;
           break;
         case GEARTHREE:
+        default:
           justshifted = false;
           gearaction = NOTSHIFTING;
           break;
@@ -42,10 +43,6 @@ void shiftcheck()
         justshifted = true;
         gearaction = SHIFTINGDOWN;
         switch (gear) {
-          case GEARNEUTRAL:
-            justshifted = false;
-            gearaction = NOTSHIFTING;
-            break;
           case GEARONE:
             justshifted = false;
             gearaction = NOTSHIFTING;
@@ -60,6 +57,11 @@ void shiftcheck()
           case GEARTHREE:
             gear = GEARUNDEFINED;
             targetgear = GEARTWO;
+            break;
+          case GEARNEUTRAL:
+          default:
+            justshifted = false;
+            gearaction = NOTSHIFTING;
             break;
         }
       }
@@ -82,14 +84,15 @@ void shiftcheck()
         if (gearaction == SHIFTINGUP)
         {
           shiftaction = SHIFTSTAGE_OFFGAS;
-          targetRPMs = axlerpms * gearratios[targetgear]*0.90f;
+          targetRPMs = axlerpms * gearratios[targetgear] * 0.90f;
 
           if (targetRPMs < RPMLOWCUTOFF)
           {
             targetRPMs = 0;
             gearboxreverse = true;
-            throttleaftershift = 0;
-            throttlepos = 0;
+            throttlepos = 100;
+            throttleaftershift = throttlepos;
+            thisshiftthrottle = throttlepos;
           }
           else
           {
@@ -104,8 +107,22 @@ void shiftcheck()
           if (gearaction == SHIFTINGDOWN)
           {
             shiftaction = SHIFTSTAGE_OFFGAS;
-            targetRPMs = rpms * 95 / 100;
-            throttlepos = lastthrottle * 95 / 100;
+            targetRPMs = axlerpms * gearratios[targetgear+1] * 0.95f;
+            if (targetRPMs < RPMLOWCUTOFF)
+            {
+              targetRPMs = 0;
+              gearboxreverse = true;
+              throttlepos = 100;
+              throttleaftershift = throttlepos;
+              thisshiftthrottle = throttlepos;
+            }
+            else
+            {
+              
+              throttleaftershift = getThrottlefromRPM(targetRPMs, thisvoltage);
+              lastthrottle * 0.95f;
+              throttlepos = throttleaftershift;
+            }
             lastthrottle = throttlepos;
             justshifted = true;
           }
@@ -132,18 +149,6 @@ void shiftcheck()
         justshifted = false;
         shifttime = thistime;
         shifttimeout = UPSHIFT_OFFGAS_TIMEOUT;
-        /*
-          if (targetgear == GEARTHREE)
-          {
-          if (GEAR3POSITION > GEAR2POSITION)
-          {
-            SetGoalPosition(SERVO_ID, Gearpositions[GEARNEUTRAL] - 25);
-          }
-          else
-          {
-            SetGoalPosition(SERVO_ID, Gearpositions[GEARNEUTRAL] + 25);
-          }
-          }*/
       }
       else
       {
@@ -154,44 +159,22 @@ void shiftcheck()
           shifttimeout = DOWNSHIFT_OFFGAS_TIMEOUT;
         }
       }
-      if (false)
-      //if ((abs(rpms) > targetRPMs) && (gearaction == SHIFTINGUP))
+      if (gearboxreverse && targetRPMs == 0)
       {
-        if ((thistime - shifttime) > shifttimeout)
-        {
-          //if we've spent too long in this stage, fall through to servo slewing; as long as we've started to get off the gas
-          shiftaction = SHIFTSTAGE_SERVOSLEW;
-          justshifted = true;
-          if (gearaction == SHIFTINGUP)
-          {
-            throttlepos = throttleaftershift;
-            thisshiftthrottle = throttlepos;
-          }
-        }
-        else
-        {
-        }
+        throttlepos = 100;
+        thisshiftthrottle = throttlepos;
       }
-      else
+
+      //if shifting down, fall through to servo slewing; as long as we've started to get off the gas
+      shiftaction = SHIFTSTAGE_SERVOSLEW;
+      if (gearaction == SHIFTINGUP)
       {
-        if (gearboxreverse && targetRPMs == 0)
-        {
-          targetRPMs = RPMLOWCUTOFF;
-          throttlepos = 75;
-          thisshiftthrottle = throttlepos;
-        }
-        else
-        {
-          //if shifting down, fall through to servo slewing; as long as we've started to get off the gas
-          shiftaction = SHIFTSTAGE_SERVOSLEW;
-          if (gearaction == SHIFTINGUP)
-          {
-            throttlepos = throttleaftershift;
-            thisshiftthrottle = throttlepos;
-          }
-          justshifted = true;
-        }
+        throttlepos = throttleaftershift;
+        thisshiftthrottle = throttlepos;
       }
+      justshifted = true;
+
+
       break;
     case SHIFTSTAGE_SERVOSLEW:
       if (DEBUGMODE && justshifted) {
@@ -200,20 +183,14 @@ void shiftcheck()
         Serial.print(", Servo Slewing: ");
         Serial.println(millis());
       }
-      if (gearaction == SHIFTINGUP)
-      {
-        throttlepos = throttleaftershift;
-        thisshiftthrottle = throttlepos;
-      }
-      else
-      {
-        throttlepos = lastthrottle;
-        thisshiftthrottle = throttlepos;
-      }
+
+      throttlepos = throttleaftershift;
+      thisshiftthrottle = throttlepos;
+
       if (justshifted)
       {
         justshifted = false;
-        gearboxreverse = false;
+
         if (gearaction == SHIFTINGUP)
         {
           SetGoalPosition(SERVO_ID_SHIFT, Gearpositions[targetgear]);
@@ -262,34 +239,23 @@ void shiftcheck()
       if (justshifted)
       {
         justshifted = false;
+        gearboxreverse = false;
         if (DEBUGMODE)
         {
           Serial.print("End Shift: ");
           Serial.println(millis());
         }
-        if (gearaction == SHIFTINGUP)
-        {
-          shifttime = thistime;
-          shifttimeout = UPSHIFT_ONGAS_TIMEOUT;
-          gearaction = NOTSHIFTING;
-          shiftaction = SHIFTIDLE;
-        }
-        else
-        {
-          if (gearaction == SHIFTINGDOWN)
-          {
-            shifttime = thistime;
-            shifttimeout = DOWNSHIFT_ONGAS_TIMEOUT;
-          }
-        }
+        shifttime = thistime;
+        shifttimeout = UPSHIFT_ONGAS_TIMEOUT;
+        gearaction = NOTSHIFTING;
+        shiftaction = SHIFTIDLE;
       }
       else
       {
         gearaction = NOTSHIFTING;
         shiftaction = SHIFTIDLE;
       }
-      refractoryscalar = POSTSHIFTSCALAR/gearrampscalers[gear];
-      
+      refractoryscalar = POSTSHIFTSCALAR / gearrampscalers[gear];
       break;
   }
 }
@@ -303,7 +269,7 @@ float getThrottlefromRPM(float inRPM, float inVoltage)
   }
   else
   {
-    if(inRPM>MAPPINGHIGHCUTOFF)
+    if (inRPM > MAPPINGHIGHCUTOFF)
     {
       inRPM = MAPPINGHIGHCUTOFF;
     }
@@ -312,7 +278,7 @@ float getThrottlefromRPM(float inRPM, float inVoltage)
     float term2 = pow(inRPM, 2) * THROTTLERPM2TERM;
     float term1 = inRPM * THROTTLERPM1TERM;
     float term0 = THROTTLERPM0TERM;
-    
+
     float outputThrottle = (term4 + term3 + term2 + term1 + term0);
     return outputThrottle;
   }

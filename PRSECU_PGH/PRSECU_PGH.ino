@@ -2,13 +2,13 @@
 //TIRE SIZE
 #define SIZEOFTIRE  14.0f //9.75f //in inches
 //GEARBOX OUTPUT SPROCKET SIZE
-#define GEARINGINPUTSPROCKET  11.0f
+#define GEARINGINPUTSPROCKET  11.00f
 //AXLE SPROCKET SIZE
-#define GEARINGOUTPUTSPROCKET 48.0f
+#define GEARINGOUTPUTSPROCKET 59.0f
 
 //CURRENT LIMIT
-#define FUSEOVERCURRENT 480
-#define PHASEOVERCURRENT  900
+#define FUSEOVERCURRENT 400
+#define PHASEOVERCURRENT  800
 
 /**TO-DO:
    reverse to change gears at low motor RPM
@@ -49,8 +49,8 @@ unsigned long serialtime =    1;
 //--------------------------------THROTTLE INPUT AND OUTPUT----------------------------
 #define THROTTLEMIN               20
 #define THROTTLEMAX               600
-#define SERVODEAD                 16                         //THROTTLE INPUT AND OUTPUT  //space between this and the zero band won't be sent because it will cause odd behavior with the ESC
-#define SERVOHYSTERESIS           11                          //wont turn off below SERVODEAD until we're this much below the dead zone
+#define SERVODEAD                 17                         //THROTTLE INPUT AND OUTPUT  //space between this and the zero band won't be sent because it will cause odd behavior with the ESC
+#define SERVOHYSTERESIS           12                          //wont turn off below SERVODEAD until we're this much below the dead zone
 #define SERVOOFFSET               0
 #define SERVOMIN                  74              //LOOP AND SAMPLE TIMING  //absolute minimum value writable to the servo
 #define SERVOMAX                  926              //LOOP AND SAMPLE TIMING  //absolute maximum value writable to the servo
@@ -66,9 +66,8 @@ float coastthrottlepos = 0;
 float thisvoltage = 0;
 #define FULLSCALEVOLTAGE 67.7f
 boolean thisbrake = false;
-boolean rpmavailableflag = false;
-#define RAMPUPRATECONST  0.5f  //ramp up 1uS of throttle output per each 1mS of time
-#define RAMPUPRATESCALE  0.7f  //ramp up 1uS of throttle output per each 1mS of time
+#define RAMPUPRATECONST  0.3f  //ramp up 1uS of throttle output per each 1mS of time
+#define RAMPUPRATESCALE  0.8f  //ramp up 1uS of throttle output per each 1mS of time
 #define RAMPUPRATEPORTION 1.01f
 #define RAMPUPRATEADDER 1.0f
 #define GEAR0RAMPSCALER 2.0f
@@ -245,7 +244,6 @@ long rpms = 0;
 float curdist = 0.0;
 float velocity = 0.0;
 long prevxpos = 0;
-long motorpositions[SAMPLEBUFFERSIZE];
 long axlepositions[SAMPLEBUFFERSIZE];
 unsigned long times[SAMPLEBUFFERSIZE];
 int thisindex = 0;
@@ -260,11 +258,11 @@ unsigned long lastrpmreading = 0;
 #define LOWRPMTHROTTLE   0.22f
 #define RPMHIGHLIMIT 8000.0f
 #define LOOKBACKTIME_RPM  100 //milliseconds, how far back to look to get a baseline for motor RPM.
-#define LOOKBACKTIME_SPEED  60 //milliseconds, how far back to look to get a baseline for speed.
+#define LOOKBACKTIME_SPEED  60000 //microseconds, how far back to look to get a baseline for speed.
 #define COUNTSPERREV 42 //14 poles * 3 commutations = 42
 #define DYNAPARCOUNTS 4096.0f
-#define DYNAPARREDUCTIONSIZE 55.6f
-#define AXLEREDUCTIONSIZE 27.0f
+#define DYNAPARREDUCTIONSIZE 55.4f
+#define AXLEREDUCTIONSIZE 26.8f
 #define NUMAXLECOUNTS DYNAPARCOUNTS*(AXLEREDUCTIONSIZE/DYNAPARREDUCTIONSIZE) //1968
 float COUNTSPERAXLEROT = NUMAXLECOUNTS;
 #define TIREDIAMETER  SIZEOFTIRE
@@ -275,7 +273,8 @@ float TIRESIZE = TIRECIRC;
 float AXLERPMTOMPH = AXLEROTTOSPEEDCONVERSION;
 
 #define SPEEDRPMFACTOR 33.61f
-#define FREQTORPM 2.85714f//1.4286f   //returning 1Hz results in ~1.4RPM, with 42 increments per rotation it takes 42 seconds to make one rotation at 1Hz between commutations
+#define FREQTORPM_NUM 2926//1.4286f   //returning 1Hz results in ~1.4RPM, with 42 increments per rotation it takes 42 seconds to make one rotation at 1Hz between commutations
+#define FREQTORPM_ROT 10
 #define MOTORKV 130
 #define MOTORSPROCKET       9.0f
 #define GEARHUBINSPROCKET   29.0f
@@ -352,9 +351,7 @@ void sample()
   thistime = micros();
   times[thisindex] = thistime;
   //get our encoder positions.  at 100RPM in low gear, axle encoder is ~200pulses/sec and motor encoder is ~70pulses/sec
-  motorpositions[thisindex] = 0;//THISISBROKEN: use freqmeasuremulti;
   axlepositions[thisindex] = LaxlePosn.calcPosn();
-
 
   //take our digital samples
   thisbrake = !digitalRead(DPIN_BRAKE);
@@ -364,11 +361,34 @@ void sample()
   {
     if (!digitalRead(DPIN_SHIFTDOWN))
     { //if both are pressed/switched together, auto shift.  best not to actuate this during operation, only when off.
-      shiftupdebounce = false;
-      shiftdowndebounce = false;
+      if (shiftupdebounce)
+      {
+        shiftupdebounce = false;
+        updebouncetime = micros();
+      }
+      else
+      {
+        if (shiftdowndebounce)
+        {
+          shiftdowndebounce = false;
+          downdebouncetime = micros();
+        }
+        else
+        {
+          if (!autoshift) //lets us latch into this state and not have to evaluate the time check eevery loop
+          {
+            if ((micros() - updebouncetime > BUTTONDEBOUNCETIME) && (micros() - downdebouncetime > BUTTONDEBOUNCETIME))
+            {
+              autoshift = true;
+            }
+          }
+        }
+      }
+
     }
     else
     {
+      autoshift = false;
       if (!shiftupdebounce)
       {
         shiftupdebounce = true;
@@ -377,15 +397,19 @@ void sample()
       }
       else
       {
-        if (micros() - updebouncetime > BUTTONDEBOUNCETIME)
+        if (!thisshiftup)
         {
-          thisshiftup = true;
+          if (micros() - updebouncetime > BUTTONDEBOUNCETIME)
+          {
+            thisshiftup = true;
+          }
         }
       }
     }
   }
   else
   {
+    autoshift = false;
     shiftupdebounce = false;
     if (!digitalRead(DPIN_SHIFTDOWN))
     {
@@ -397,9 +421,12 @@ void sample()
       }
       else
       {
-        if (micros() - downdebouncetime > BUTTONDEBOUNCETIME)
+        if (!thisshiftdown)
         {
-          thisshiftdown = true;
+          if (micros() - downdebouncetime > BUTTONDEBOUNCETIME)
+          {
+            thisshiftdown = true;
+          }
         }
       }
     }
@@ -437,7 +464,7 @@ void sample()
   {
     thiscurrent = 0;
   }
-  thiskalmancurrent = kalmanCurrent.updateEstimate(thiscurrent);
+  thiskalmancurrent = thiscurrent;//kalmanCurrent.updateEstimate(thiscurrent);
   currents[thisindex] = int(thiscurrent);
 
   //convert the throttle ADC readings to a usable range
@@ -576,19 +603,19 @@ void calculatevalues()
 {
   if (Lmotor.available() > 0)
   {
-    rpmavailableflag = true;
     float lastrpms = rpms;
     rpms = 0;
     int rpmcount = 0;
+    long temprpms = 0;
     lastrpmreading = millis();
     while (Lmotor.available() > 0)
     {
-      float temprpms = Lmotor.countToFrequency(Lmotor.read()) * FREQTORPM; //(xpos - prevxpos) * minuterpmmultiplier / COUNTSPERREV;
+      temprpms = long(Lmotor.countToFrequency(Lmotor.read()) * FREQTORPM_NUM) >> FREQTORPM_ROT; //(xpos - prevxpos) * minuterpmmultiplier / COUNTSPERREV;
       rpms += temprpms;
       rpmcount++;
     }
     rpms /= rpmcount;
-    thiskalmanrpm = kalmanRPM.updateEstimate(rpms);
+    thiskalmanrpm = rpms;//kalmanRPM.updateEstimate(rpms);
     if (rpms > RPMHIGHLIMIT)
     {
       rpms = lastrpms;
@@ -599,17 +626,15 @@ void calculatevalues()
   {
     if ((millis() - LOOKBACKTIME_RPM) > lastrpmreading)
     {
-      rpmavailableflag = false;
-      //lastrpmreading = millis();
       rpms = 0;
       if (abs(thiskalmanrpm) > 1)
       {
-        thiskalmanrpm = kalmanRPM.updateEstimate(rpms);
+        thiskalmanrpm = rpms;//kalmanRPM.updateEstimate(rpms);
       }
     }
   }
 
-  if (rpms != 0)
+  if (rpms >= 1)
   {
     if (logratematrix[LOGMATRIX_MOVING] != LOGRATE_MOVING)
     {
@@ -626,8 +651,8 @@ void calculatevalues()
     }
   }
 
-  int oldspeedindex = thisindex + SAMPLEBUFFERSIZE - 1;
-  while (times[thisindex] - times[(oldspeedindex % SAMPLEBUFFERSIZE)] < (1000 * LOOKBACKTIME_SPEED))
+  unsigned int oldspeedindex = thisindex + SAMPLEBUFFERSIZE - 1;
+  while (times[thisindex] - times[(oldspeedindex % SAMPLEBUFFERSIZE)] < (LOOKBACKTIME_SPEED))
   {
     oldspeedindex--;
     if (oldspeedindex <= thisindex)
@@ -731,10 +756,6 @@ void calculatevalues()
     Serial.print(": ");
     Serial.print(xpos);
     Serial.print(": RPM: ");
-    if (rpmavailableflag)
-    {
-      Serial.print("+");
-    }
     Serial.println(rpms);//motorPosn.calcPosn());//
 
   }
@@ -985,20 +1006,13 @@ void setup()                                             // run once, when the s
   delay(10);
   SetMovingSpeed(SERVO_ID_BROADCAST, 1023);
   delay(10);
-  SetTorqueLimit(SERVO_ID_BROADCAST, 1023);
+  SetTorqueLimit(SERVO_ID_BROADCAST, 700);
   delay(10);
   SetTorqueEnable(SERVO_ID_BROADCAST, true);
   delay(10);
+  myservo.writeMicroseconds(SERVOZERO + 100);
   SetGoalPosition(SERVO_ID_SHIFT, Gearpositions[gear]);
 
-  if (!digitalRead(DPIN_SHIFTUP) && !digitalRead(DPIN_SHIFTDOWN))
-  {
-    autoshift = true;
-  }
-  else
-  {
-    autoshift = false;
-  }
   //if the controller boots up and the throttle is held down, wait here until it returns to zero
   if (analogRead(APIN_THROTTLE) > THROTTLEMIN)
   {
@@ -1019,6 +1033,7 @@ void setup()                                             // run once, when the s
     Serial.println("GO!");
   }
   delay(250);
+  myservo.writeMicroseconds(SERVOZERO);
   Lmotor.begin(DPIN_MOTOR_1, FREQMEASUREMULTI_ALTERNATE);
   byte inbuffert[10];
   GetServoPosition(SERVO_ID_SHIFT);
@@ -1028,7 +1043,6 @@ void setup()                                             // run once, when the s
   }
   for (int i = 0; i < SAMPLEBUFFERSIZE; i++)
   {
-    motorpositions[i] = 0;
     times[i] = 0;
   }
   times[0] = micros();
@@ -1046,28 +1060,28 @@ void loop()
   sample(); //80uS
   calculatevalues();
   control();
-  byte tempchar = -1;
-  tempchar = Serial.read();
-  if (tempchar != -1)
-  {
-    if (tempchar == 'G')
-    {
-      logtrigger = true;
-      datalogging = false;
-      logratematrix[LOGMATRIX_ONESHOT] = LOGRATE_ONESHOT;
-      oneshotcounter = 0;
-    }
-    else
-    {
-      if (tempchar == 'E')
-      {
-        logtrigger = false;
-      }
-    }
-    Serial.clear();
-  }
   if (DATALOGGING)
   {
+    byte tempchar = -1;
+    tempchar = Serial.read();
+    if (tempchar != -1)
+    {
+      if (tempchar == 'G')
+      {
+        logtrigger = true;
+        datalogging = false;
+        logratematrix[LOGMATRIX_ONESHOT] = LOGRATE_ONESHOT;
+        oneshotcounter = 0;
+      }
+      else
+      {
+        if (tempchar == 'E')
+        {
+          logtrigger = false;
+        }
+      }
+      Serial.clear();
+    }
     datalog();
   }
   while ((micros() - prevperiod) < MINPERIOD) {}

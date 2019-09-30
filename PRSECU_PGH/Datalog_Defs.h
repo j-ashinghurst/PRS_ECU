@@ -117,13 +117,14 @@ byte IMUcounter = 0;
 #define LOGMATRIX_BACKGROUND  4 //default rate
 #define LOGMATRIX_ONESHOT     5 //to request an immediate log
 
-#define LOGRATE_SHIFTING      5
-#define LOGRATE_ONTHROTTLE    50
+#define LOGRATE_SHIFTING      10
+#define LOGRATE_ONTHROTTLE    100
 #define LOGRATE_OVERCURRENT   10
 #define LOGRATE_MOVING        100
 #define LOGRATE_BACKGROUND    1000
 #define LOGRATE_ONESHOT       1000
-#define COUNTS_ONESHOT        5
+#define COUNTS_ONESHOT        1
+
 unsigned int oneshotcounter = 0;
 #define RECEIVER_TIMEOUT      990
 unsigned long lastpacket = 0;
